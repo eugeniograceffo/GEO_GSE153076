@@ -56,3 +56,4 @@ multiqc_report_alignment_data/multiqc_star.txt
 Sequencing_depth.txt
 transcript_count_matrix_gorilla.csv
 transcript_count_matrix_human.csv
+metadata_GSE153076_backup.txt

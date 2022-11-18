@@ -1,0 +1,576 @@
+---
+title: "THRA Isoform 1 and Isoform 2 Expression pattern and exploration of dataset"
+output:
+  html_document:
+    toc: True
+    toc_float: True
+    df_print: paged
+---
+
+INTRODUCTION to the Experiment
+
+GEO_GSE153076. Organoids generated from 3 replicate batches of H9 and G1 cell lines were collected at 7 time points for bulk RNA-seq analysis: 0, 2, 3, 5, 10, 15 and 25 days post neural induction. ~300 organoids per replicate were collected at the time points ranging between day 0 and 5, ~150 organoids at day 10, ~100 organoids at day 15, and ~50 organoids at day 25.
+
+```{r}
+#load libraries
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(plotly)
+library(matrixStats)
+library(ggrepel)
+library(scales)
+library(readxl)
+library(dplyr)
+library(ggpubr)
+
+```
+
+
+```{r}
+## set paths for output figure
+path_plots <- "~/OneDrive - Charité - Universitätsmedizin Berlin/Schuelke_Lab/EG15_RNA_Seq/GEO_GSE153076/Figures/Expression_pattern"
+
+## load metadata file
+
+metadata <- read_delim("metadata_GSE153076.txt")
+
+metadata <- metadata %>%
+  select(Sample=Run, Organism, Time_point, Batch)
+
+## load sequencing depth for normalization
+
+depth <- read_delim("Sequencing_depth.txt")
+
+depth <- depth %>%
+  select(Sample, "M Aligned", "M Seqs")
+
+
+
+##Load mosdepth outputs
+
+file_links_mosdepth <- list.files(path= "~/OneDrive - Charité - Universitätsmedizin Berlin/Schuelke_Lab/EG15_RNA_Seq/GEO_GSE153076/mosdepth_outputs" , pattern = "*.bed", full.names=T)
+
+
+# initialize an empty dataframe
+data_mosdepth <- data_frame("V1"=character(),
+                   "V2"=integer(),
+                   "V3"=integer(),
+                   "V4"=character(),
+                   "V5"=double(),
+                   "Sample"=character()) 
+
+for (x in file_links_mosdepth) {
+  table_sample <- read.delim(x, header = FALSE) ## read table
+  basename_sample <- str_remove(basename(x), "_Aligned.out.regions.bed")  ## get the sample name from the file path
+  table_sample <- mutate(table_sample, "Sample"=basename_sample)
+  data_mosdepth <- bind_rows(data_mosdepth, table_sample)
+  
+}
+
+data_mosdepth
+```
+
+```{r}
+## Let's rearrange the data in a useful way
+dataset <- data_mosdepth %>%
+  select(Sample, Isoform = V4, Reads_count =V5) %>%
+  spread(key="Isoform", value="Reads_count")
+
+## Lets separate the dataset: one for gene expression (to be normalized), one for A1vsA2 ratios (no normaliz)
+
+dataset_gene <- select(dataset, -"9a", -"9b")
+dataset_isoform <- select(dataset, Sample, "9a", "9b")
+
+## Lets normalize by the M of uniquely aligned reads
+
+dataset_gene_normalized <- dataset_gene %>% 
+  mutate(across(where(is.numeric), ~ .x/depth$`M Aligned`)) # value/M of reads
+
+## Lets merge with metadata
+dataset_isoform <- dataset_isoform %>%
+  separate(Sample, "Sample", "_", extra="drop")
+
+dataset_isoform <- inner_join(metadata, dataset_isoform, by ="Sample")
+## Lets factorize the values
+#dataset_isoform$Time_point <- as.factor(dataset_isoform$Time_point)
+dataset_isoform$Batch <- as.factor(dataset_isoform$Batch)
+
+ # mutate("Package" = as.factor("mosdepth")) 
+
+
+
+## Let's merge the sequencing depth for normalization
+
+dataset <- inner_join(dataset, depth, by="Sample")
+
+
+## remove the last part of the string on the sample names
+dataset$Sample<-gsub("_Homo_sapiens_RNA-Seq","",as.character(dataset$Sample)) 
+dataset$Sample<-gsub("_Gorilla_gorilla_RNA-Seq","",as.character(dataset$Sample)) 
+
+### let's fill in with the metadata
+dataset <- inner_join(dataset, metadata, by ="Sample")
+
+### rearrangement and factorization of columns
+dataset$Treatment <- as.factor(dataset$Treatment)
+dataset$study_day <- as.factor(dataset$study_day)
+dataset <- rename(dataset, "hiPSC_line" = "hiPSC_line\r\nline")
+
+
+dataset
+```
+
+
+
+```{r}
+## Let's calkculate THRA1 (counts of 9b) and THRA2 (9a-9b)
+
+dataset <- dataset %>%
+  mutate("THRA1"= dataset$`9b`) %>%
+  mutate("THRA2"=dataset$`9a`-dataset$`9b`) %>%
+  rename("Read_counts_9a" = "9a") %>%
+  rename("Read_counts_9b" = "9b") %>%
+  relocate(Package, .after=Sample)
+
+dataset
+
+```
+```{r}
+## Let's add the final calculations
+
+dataset_final <- dataset %>%
+  mutate("delta_A1vsA2" = THRA1 - THRA2) %>%
+  mutate("THRA1_Percentage" = round(THRA1/Read_counts_9a*100)) %>%
+  mutate("THRA2_Percentage" = round(100-THRA1_Percentage)) %>%
+  mutate("THRA1_higher" = THRA1 > THRA2) %>%
+  mutate("delta_percentage" = THRA1_Percentage - THRA2_Percentage)
+
+dataset_final
+  
+```
+
+
+
+```{r}
+# Barchart showing Expression of A1 and A2 over time in only control samples
+total_plot <- filter(dataset_final, Treatment == "control") %>%
+  select(Sample,study_day,  THRA1, THRA2)
+
+total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
+total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
+
+total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform", values_to = "Expression")
+  
+
+
+ggplot(total_plot, aes(x=study_day, y=Expression, label=Isoform)) + 
+  geom_bar(stat='summary', position = "stack", aes(fill=Isoform), width=.5)  +
+   theme_light(base_size = 14)+
+  scale_y_continuous("Read counts") +
+  scale_fill_manual(name="Isoform", 
+                    labels = c( "THRA1", "THRA2"), 
+                    values = c("THRA1"="#A2D2DB", "THRA2"="#5A7C86")) + 
+  labs(subtitle="Read counts calculated with Mosdepth", 
+       title= "THRA isoform expression pattern",
+       caption = "~78M uniquely mapped reads, n>=2")
+
+
+
+
+ggsave("THRA1_THRA2_mosdepth_over_time_control.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+```{r}
+### Plot of Control vs T3 pulse over time - THRA
+graph_data <- select(dataset_final, Sample,study_day,Treatment,  THRA1, THRA2, THRA, hiPSC_line)
+
+### Let´s calculate the group summaries
+
+
+
+dataset_stats <- graph_data %>%
+  group_by(study_day, Treatment) %>%
+  mutate(THRA_mean = mean(THRA)) %>%
+  mutate(THRA_SD = sd(THRA)) %>%
+  mutate(THRA1_mean = mean(THRA1)) %>%
+  mutate(THRA1_SD = sd(THRA1)) %>%
+  mutate(THRA2_mean = mean(THRA2)) %>%
+  mutate(THRA2_SD = sd(THRA2)) %>%
+  select(-Sample, -hiPSC_line, -THRA, -THRA1, -THRA2)
+
+dataset_stats
+
+
+
+compare_means(THRA ~ Treatment, data = graph_data, 
+              group.by = "study_day")
+
+compare_means(THRA2 ~ Treatment,  data = graph_data, method = "anova")
+
+
+
+
+ggbarplot(graph_data, x = "study_day", y = "THRA", add = "mean_se",
+          fill = "Treatment",
+          position = position_dodge(0.8)) +
+  scale_fill_manual("", values = c("control" = "#31092D", "T3_pulse"="#E98A33")) +
+  stat_compare_means(aes(group = Treatment), label = "p.signif", label.y = c(80, 220, 255)) +
+  labs(subtitle="Read counts calculated with Mosdepth", 
+       title= "THRA expression of Cntrl vs T3 treatment over time",
+       caption = "Wilcoxon test, n>=2\n ~78M uniquely mapped reads") +
+  scale_y_continuous("Normalized read counts") +
+  theme(legend.position='right')+
+  theme_light(base_size = 14)
+
+## save plot
+ggsave("Treatment_barchart_over_time_THRA.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+```{r}
+### Plot of Control vs T3 pulse over time - THRA1
+
+ggbarplot(graph_data, x = "study_day", y = "THRA1", add = "mean_se",
+          fill = "Treatment",
+          position = position_dodge(0.8)) +
+  scale_fill_manual("", values = c("control" = "#31092D", "T3_pulse"="#E98A33")) +
+  stat_compare_means(aes(group = Treatment), label = "p.signif", label.y = c(300, 850, 800)) +
+  labs(subtitle="Read counts calculated with Mosdepth", 
+       title= "THRA1 expression of Cntrl vs T3 treatment over time",
+       caption = "Wilcoxon test, n>=2\n ~78M uniquely mapped reads") +
+  scale_y_continuous("Normalized read counts") +
+  theme(legend.position='right')+
+  theme_light(base_size = 14)
+
+
+
+## save plot
+ggsave("Treatment_barchart_over_time_THRA1.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+```{r}
+### Plot of Control vs T3 pulse over time - THRA2
+ggbarplot(graph_data, x = "study_day", y = "THRA2", add = "mean_se",
+          fill = "Treatment",
+          position = position_dodge(0.8)) +
+  scale_fill_manual("", values = c("control" = "#31092D", "T3_pulse"="#E98A33")) +
+  stat_compare_means(aes(group = Treatment), label = "p.signif", label.y = c(800, 1600, 2100)) +
+  labs(subtitle="Read counts calculated with Mosdepth", 
+       title= "THRA2 expression of Cntrl vs T3 treatment over time",
+       caption = "Wilcoxon test, n>=2\n ~78M uniquely mapped reads") +
+  scale_y_continuous("Normalized read counts") +
+  theme(legend.position='right') +
+  theme_light(base_size = 14)
+
+
+
+## save plot
+ggsave("Treatment_barchart_over_time_THRA2.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+
+
+
+
+
+
+```{r}
+### heatmap with continuos delta THRA1vsA2 using mosdepth
+heatmap_data <- filter(dataset_final, Package == "mosdepth")
+
+ggplot(heatmap_data, aes(1, reorder(Sample,delta_A1vsA2), fill=delta_A1vsA2)) +
+  geom_tile()+
+  ggtitle("THRA isoform expression pattern (THRA1/THRA2) - mosdepth") +
+  theme_light(base_size = 12)+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  scale_fill_gradient2('delta_reads', limits=c(-350, 350), breaks = c( -350, -150, 0, 150, 350),  low = "#56B4E9", high = "darksalmon", guide="colorbar")
+
+ggsave("Heatmap_THRA1vsA2_mosdepth.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+```{r}
+### heatmap of percentages using mosdepth
+heatmap_data <- filter(dataset_final, Package == "mosdepth")
+
+ggplot(heatmap_data, aes(1, reorder(Sample,THRA1_Percentage), fill=THRA1_Percentage)) +
+  geom_tile()+
+  ggtitle("THRA isoform expression pattern (THRA1/THRA2) - mosdepth") +
+  theme_light(base_size = 12)+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  scale_fill_gradient2('% of THRA1', limits=c(0, 100), breaks = c( 0, 50, 100),  low = "#56B4E9", high = "darksalmon", guide="colorbar",  midpoint = 50)
+
+ggsave("Heatmap_THRA1vsA2_mosdepth_percentages.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+```{r}
+### Lets plot the percentage in a different way, so that the actual percentage is visible
+
+heatmap_data_percentage <- filter(dataset_final, Package == "mosdepth")
+heatmap_data_percentage <- heatmap_data_percentage[order(heatmap_data_percentage$delta_percentage), ]  # sort
+heatmap_data_percentage$Sample <- factor(heatmap_data_percentage$Sample, levels = heatmap_data_percentage$Sample)  # convert to factor to retain sorted order in plot.
+
+
+# Diverging Barcharts
+ggplot(heatmap_data_percentage, aes(x=Sample, y=THRA1_Percentage, label=THRA1_Percentage)) + 
+  geom_bar(stat='identity', aes(fill=THRA1_higher), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Predominant Isoform", 
+                    labels = c("THRA1", "THRA2"), 
+                    values = c("TRUE"="darksalmon", "FALSE"="#56B4E9")) + 
+  scale_y_continuous("% THRA1" ,limits=c(0, 100))+ 
+  geom_hline(yintercept=50, linetype="dashed", color = "black")+
+  labs(subtitle="Percentage of THRA1 expression over the total of THRA", 
+       title= "THRA isoform expression pattern - Mosdepth",
+       caption = "~58M uniquely mapped reads, n=1") +  
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+ggsave("THRA1vsA2_mosdepth_percentages.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+```{r}
+# Diverging Barcharts oh total THRA
+total_plot <- filter(dataset_final, Package == "mosdepth") %>%
+  select(Sample, "THRA1" = THRA1_Percentage,"THRA2" = THRA2_Percentage)
+
+total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
+total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
+
+total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform", values_to = "Expression")
+  
+
+
+ggplot(total_plot, aes(x=Sample, y=Expression, label=Isoform)) + 
+  geom_bar(stat='identity',position = "stack", aes(fill=Isoform), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Isoform", 
+                    labels = c( "THRA1", "THRA2"), 
+                    values = c("THRA1"="#A2D2DB", "THRA2"="#5A7C86")) + 
+  scale_y_continuous("" ,limits=c(0, 100))+ 
+  geom_hline(yintercept=50, linetype="dashed", color = "#DC4E3C")+
+  labs(subtitle="", 
+       title= "THRA isoform expression pattern - Mosdepth",
+       caption = "~58M uniquely mapped reads, n=1") + 
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+
+
+
+ggsave("THRA1vsA2_mosdepth_percentages_new.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+```{r}
+# Diverging Barcharts
+ggplot(heatmap_data_percentage, aes(x=Sample, y=delta_percentage, label=delta_percentage)) + 
+  geom_bar(stat='identity', aes(fill=THRA1_higher), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Predominant Isoform", 
+                    labels = c("THRA1", "THRA2"), 
+                    values = c("TRUE"="darksalmon", "FALSE"="#56B4E9")) + 
+  scale_y_continuous("Delta THRA1-THRA2 in %" ,limits=c(-100, 100))+
+  labs(subtitle="Delta THRA1-THRA2 expressed in percentage", 
+       title= "THRA isoform expression pattern") + 
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+
+
+```
+
+
+
+
+```{r}
+### heatmap with AUT AUT delta THRA1vsA2 using mosdepth
+heatmap_data <- filter(dataset_final, Package == "mosdepth")
+
+ggplot(heatmap_data, aes(1, reorder(Sample,delta_A1vsA2), fill=THRA1_higher)) +
+  geom_tile()+
+  ggtitle("THRA isoform expression pattern (THRA1/THRA2) - mosdepth") +
+  theme_light(base_size = 12)+
+  theme(axis.title.y=element_blank(),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank()) +
+  scale_fill_manual(values = c("TRUE"= "darksalmon", "FALSE" = "#56B4E9"))
+
+ggsave("Heatmap_THRA1vsA2_AUT_AUT_mosdepth.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+### Calulations with the STRINGTIE ouput
+
+library(readr)
+data_stringtie <- read_csv("Old analysis/DESeq2_analysis_old/transcript_count_matrix.csv")
+
+stringtie_iso_1 <- filter(data_stringtie, transcript_id == "ENST00000450525.7")%>%
+  select(-transcript_id)
+
+stringtie_iso_1
+
+stringtie_iso_1 <- as.data.frame(t(stringtie_iso_1)) 
+stringtie_iso_1 <- mutate(stringtie_iso_1, "Sample"=rownames(stringtie_iso_1), "THRA1" = V1) %>%
+  select(-V1)
+
+stringtie_iso_1
+
+
+
+stringtie_iso_2 <- filter(data_stringtie, transcript_id == "ENST00000264637.8")%>%
+  select(-transcript_id)
+
+stringtie_iso_2 <- as.data.frame(t(stringtie_iso_2)) ## to transpose the dataframe
+stringtie_iso_2 <- mutate(stringtie_iso_2, "Sample"=rownames(stringtie_iso_2), "THRA2" = V1) %>%
+  select(-V1)
+
+
+data_stringtie_filtered <- inner_join(stringtie_iso_1, stringtie_iso_2) %>%
+  mutate("Package" = as.factor("stringtie"))%>%
+  relocate(Package, .after=Sample)
+
+
+##Add calculations as for the other methods
+
+data_stringtie_filtered <- data_stringtie_filtered%>%
+  mutate("THRA1_Percentage" = round(THRA1/(THRA1+THRA2)*100)) %>%
+  mutate("THRA2_Percentage" = round(100-THRA1_Percentage)) %>%
+  mutate("THRA1_higher" = THRA1 > THRA2) %>%
+  mutate("delta_percentage" = THRA1_Percentage - THRA2_Percentage)
+
+data_stringtie_filtered
+  
+```
+```{r}
+### Lets make the same bar plots to show the precentages
+
+data_stringtie_filtered <- data_stringtie_filtered[order(data_stringtie_filtered$delta_percentage), ]  # sort
+data_stringtie_filtered$Sample <- factor(data_stringtie_filtered$Sample, levels = data_stringtie_filtered$Sample)  # convert to factor to retain sorted order in plot.
+
+
+# Diverging Barcharts
+ggplot(data_stringtie_filtered, aes(x=Sample, y=THRA1_Percentage, label=THRA1_Percentage)) + 
+  geom_bar(stat='identity', aes(fill=THRA1_higher), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Predominant Isoform", 
+                    labels = c("THRA1", "THRA2"), 
+                    values = c("TRUE"="darksalmon", "FALSE"="#56B4E9")) + 
+  scale_y_continuous("% THRA1" ,limits=c(0, 100))+ 
+  geom_hline(yintercept=50, linetype="dashed", color = "black")+
+  labs(subtitle="Percentage of THRA1 expression over the total of THRA", 
+       title= "THRA isoform expression pattern - StringTie",
+       caption = "~58M uniquely mapped reads, n=1") +  
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+ggsave("THRA1vsA2_StringTie_percentages.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+```{r}
+# Diverging Barcharts oh total THRA
+total_plot <- data_stringtie_filtered %>%
+  select(Sample, "THRA1" = THRA1_Percentage,"THRA2" = THRA2_Percentage)
+
+total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
+total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
+
+total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform", values_to = "Expression")
+  
+
+
+ggplot(total_plot, aes(x=Sample, y=Expression, label=Isoform)) + 
+  geom_bar(stat='identity',position = "stack", aes(fill=Isoform), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Isoform", 
+                    labels = c( "THRA1", "THRA2"), 
+                    values = c("THRA1"="#A2D2DB", "THRA2"="#5A7C86")) + 
+  scale_y_continuous("" ,limits=c(0, 100))+ 
+  geom_hline(yintercept=50, linetype="dashed", color = "#DC4E3C")+
+  labs(subtitle="", 
+       title= "THRA isoform expression pattern - StringTie",
+       caption = "~58M uniquely mapped reads, n=1") + 
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+
+
+
+ggsave("THRA1vsA2_StringTie_percentages_new.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+
+```{r}
+###Lets compare the StringTie vs Mosdepth
+comparison_mosdepth <- filter(dataset_final, Package == "mosdepth") %>%
+  select(Sample, Package,delta_percentage, THRA1_Percentage, THRA2_Percentage, THRA1_higher )
+
+comparison_stringtie <- select(data_stringtie_filtered, Sample, Package, delta_percentage, THRA1_Percentage, THRA2_Percentage, THRA1_higher)
+
+comparison_merged <- bind_rows(comparison_stringtie, comparison_mosdepth)
+
+ggplot(comparison_merged, aes(Package, reorder(Sample,`delta_percentage`) , fill=`delta_percentage`)) +
+  geom_tile()+
+  labs(subtitle="Delta of THRA1 and THRA2 expressed in percentage", 
+       title= "Comparison between StringTie and Mosdepth",
+       caption = "")+
+  theme_light(base_size = 12)+
+  theme(axis.title.y=element_blank()) +
+  theme(axis.title.x=element_blank()) +
+  scale_fill_gradient2('Delta (%)', breaks = c(-50, 0, 50),  low = "#56B4E9", high = "darksalmon", guide="colorbar")
+
+
+ggsave("Heatmap_comparison_stringtie_mosdepth.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+
+```
+
+
+```{r}
+
+# Lets compare the StringTie vs Mosdepth with barchart
+ggplot(comparison_merged, aes(x=reorder(Sample,`delta_percentage`), y=THRA1_Percentage, label=Package)) + 
+  geom_bar(stat='identity',position = "dodge", aes(fill=Package), width=.5)  +
+   theme_light(base_size = 12)+
+  scale_fill_manual(name="Method", 
+                    labels = c( "mosdepth", "stringtie"), 
+                    values = c("mosdepth"="#5A7C86", "stringtie"="#A2D2DB")) + 
+  scale_y_continuous("% THRA1" ,limits=c(0, 100))+ 
+  geom_hline(yintercept=50, linetype="dashed", color = "black")+
+  labs(subtitle="Percentage of THRA1 expression over the total of THRA", 
+       title= "Comparison between StringTie and Mosdepth",
+       caption = "") + 
+    theme(axis.title.y=element_blank()) +
+  coord_flip()
+
+
+ggsave("Heatmap_comparison_stringtie_mosdepth_barchart.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+
+
+```
+
+
