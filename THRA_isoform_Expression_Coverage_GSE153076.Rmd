@@ -77,48 +77,28 @@ dataset <- data_mosdepth %>%
   select(Sample, Isoform = V4, Reads_count =V5) %>%
   spread(key="Isoform", value="Reads_count")
 
-## Lets separate the dataset: one for gene expression (to be normalized), one for A1vsA2 ratios (no normaliz)
-
-dataset_gene <- select(dataset, -"9a", -"9b")
-dataset_isoform <- select(dataset, Sample, "9a", "9b")
 
 ## Lets normalize by the M of uniquely aligned reads
 
-dataset_gene_normalized <- dataset_gene %>% 
+dataset_normalized <- dataset %>% 
   mutate(across(where(is.numeric), ~ .x/depth$`M Aligned`)) # value/M of reads
 
 ## Lets merge with metadata
-dataset_isoform <- dataset_isoform %>%
+dataset_normalized <- dataset_normalized %>%
   separate(Sample, "Sample", "_", extra="drop")
 
-dataset_isoform <- inner_join(metadata, dataset_isoform, by ="Sample")
+dataset_normalized <- inner_join(metadata, dataset_normalized, by ="Sample") %>%
+  mutate("Package" = as.factor("mosdepth")) %>%
+  relocate(Package, .after=Batch)
+
 ## Lets factorize the values
 #dataset_isoform$Time_point <- as.factor(dataset_isoform$Time_point)
-dataset_isoform$Batch <- as.factor(dataset_isoform$Batch)
+dataset_normalized$Batch <- as.factor(dataset_normalized$Batch)
 
- # mutate("Package" = as.factor("mosdepth")) 
-
-
-
-## Let's merge the sequencing depth for normalization
-
-dataset <- inner_join(dataset, depth, by="Sample")
+ 
 
 
-## remove the last part of the string on the sample names
-dataset$Sample<-gsub("_Homo_sapiens_RNA-Seq","",as.character(dataset$Sample)) 
-dataset$Sample<-gsub("_Gorilla_gorilla_RNA-Seq","",as.character(dataset$Sample)) 
-
-### let's fill in with the metadata
-dataset <- inner_join(dataset, metadata, by ="Sample")
-
-### rearrangement and factorization of columns
-dataset$Treatment <- as.factor(dataset$Treatment)
-dataset$study_day <- as.factor(dataset$study_day)
-dataset <- rename(dataset, "hiPSC_line" = "hiPSC_line\r\nline")
-
-
-dataset
+dataset_normalized
 ```
 
 
@@ -126,36 +106,69 @@ dataset
 ```{r}
 ## Let's calkculate THRA1 (counts of 9b) and THRA2 (9a-9b)
 
-dataset <- dataset %>%
-  mutate("THRA1"= dataset$`9b`) %>%
-  mutate("THRA2"=dataset$`9a`-dataset$`9b`) %>%
+dataset_normalized <- dataset_normalized %>%
+  mutate("THRA1"= dataset_normalized$`9b`) %>%
+  mutate("THRA2"=dataset_normalized$`9a`-dataset_normalized$`9b`) %>%
   rename("Read_counts_9a" = "9a") %>%
-  rename("Read_counts_9b" = "9b") %>%
-  relocate(Package, .after=Sample)
+  rename("Read_counts_9b" = "9b") 
 
-dataset
+dataset_normalized
 
 ```
 ```{r}
 ## Let's add the final calculations
 
-dataset_final <- dataset %>%
+dataset_normalized_final <- dataset_normalized %>%
   mutate("delta_A1vsA2" = THRA1 - THRA2) %>%
   mutate("THRA1_Percentage" = round(THRA1/Read_counts_9a*100)) %>%
   mutate("THRA2_Percentage" = round(100-THRA1_Percentage)) %>%
   mutate("THRA1_higher" = THRA1 > THRA2) %>%
   mutate("delta_percentage" = THRA1_Percentage - THRA2_Percentage)
 
-dataset_final
+dataset_normalized_final
   
 ```
+
+```{r}
+### Barplot each gene expression in a different graph
+gene_list <- colnames(dataset_normalized_final[,(8:23)]) #get a list of gene names from dataset
+
+for (gene in gene_list ) {
+  
+  ggline(dataset_normalized_final, x = "Time_point", y = gene, add = "mean_se",
+          color = "Organism") +
+  scale_color_manual("", values = c("Gorilla gorilla"="#5A7C86","Homo sapiens" = "#E98A33")) +
+  stat_compare_means(aes(group = Organism), label = "p.signif", method = "t.test") +
+  labs(subtitle="Normalized against M of uniquely mapped reads", 
+       title= paste0(gene, " expression"),
+       caption = "t-test within time points, n=3") +
+  scale_y_continuous("Normalized expression value") +
+  theme(legend.position='right')+
+  theme_light(base_size = 14)
+
+
+  graph_title <- paste0("Barplot_", gene, ".png")
+  
+  ggsave(graph_title, device=png, width = 20, height = 15, units = "cm", bg = "transparent", dpi = 600, path= "~/OneDrive - Charité - Universitätsmedizin Berlin/Schuelke_Lab/EG15_RNA_Seq/GEO_GSE153076/Figures/Expression_pattern/Genes_gorilla_vs_human")
+  
+
+}
+
+
+```
+
+```{r}
+compare_means(THRA ~ Organism, data = dataset_normalized_final, 
+              group.by = "Time_point", method = "anova")
+```
+
 
 
 
 ```{r}
 # Barchart showing Expression of A1 and A2 over time in only control samples
-total_plot <- filter(dataset_final, Treatment == "control") %>%
-  select(Sample,study_day,  THRA1, THRA2)
+total_plot <- filter(dataset_normalized_final, Organism=="Homo sapiens") %>%
+  select(Sample,Time_point,  THRA1, THRA2)
 
 total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
 total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
@@ -164,7 +177,7 @@ total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform",
   
 
 
-ggplot(total_plot, aes(x=study_day, y=Expression, label=Isoform)) + 
+ggplot(total_plot, aes(x=Time_point, y=Expression, label=Isoform)) + 
   geom_bar(stat='summary', position = "stack", aes(fill=Isoform), width=.5)  +
    theme_light(base_size = 14)+
   scale_y_continuous("Read counts") +
