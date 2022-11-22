@@ -71,6 +71,8 @@ for (x in file_links_mosdepth) {
 data_mosdepth
 ```
 
+
+
 ```{r}
 ## Let's rearrange the data in a useful way
 dataset <- data_mosdepth %>%
@@ -165,10 +167,11 @@ compare_means(THRA ~ Organism, data = dataset_normalized_final,
 
 
 
+
 ```{r}
-# Barchart showing Expression of A1 and A2 over time in only control samples
+# Barchart showing Expression of A1 and A2 over time in only homo sapiens
 total_plot <- filter(dataset_normalized_final, Organism=="Homo sapiens") %>%
-  select(Sample,Time_point,  THRA1, THRA2)
+  select(Sample,Time_point,  THRA1=THRA1_Percentage, THRA2= THRA2_Percentage)
 
 total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
 total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
@@ -176,23 +179,75 @@ total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # co
 total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform", values_to = "Expression")
   
 
-
-ggplot(total_plot, aes(x=Time_point, y=Expression, label=Isoform)) + 
-  geom_bar(stat='summary', position = "stack", aes(fill=Isoform), width=.5)  +
-   theme_light(base_size = 14)+
-  scale_y_continuous("Read counts") +
-  scale_fill_manual(name="Isoform", 
-                    labels = c( "THRA1", "THRA2"), 
-                    values = c("THRA1"="#A2D2DB", "THRA2"="#5A7C86")) + 
-  labs(subtitle="Read counts calculated with Mosdepth", 
-       title= "THRA isoform expression pattern",
-       caption = "~78M uniquely mapped reads, n>=2")
-
+ggbarplot(total_plot, x = "Time_point", y = "Expression", add = "mean_se",
+          fill = "Isoform") +
+  scale_fill_manual("", values = c("THRA1"="#A2D2DB","THRA2" = "#5A7C86")) +
+  labs(subtitle="Homo Sapiens", 
+       title= paste0("THRA isoform expression pattern"),
+       caption = "Mean +- SEM, n=3") +
+  scale_y_continuous("Isoform precentage (%)", breaks = c(0, 25, 50, 75, 100)) +
+  geom_hline(yintercept=50, linetype="dashed", color = "red")+
+  theme(legend.position='right')+
+  theme_light(base_size = 14)
 
 
-
-ggsave("THRA1_THRA2_mosdepth_over_time_control.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+ggsave("THRA1_THRA2_mosdepth_over_time_homo_sapiens.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
 ```
+
+```{r}
+# Barchart showing Expression of A1 and A2 over time in only homo sapiens
+total_plot <- filter(dataset_normalized_final, Organism=="Gorilla gorilla") %>%
+  select(Sample,Time_point,  THRA1=THRA1_Percentage, THRA2= THRA2_Percentage)
+
+total_plot <- total_plot[order(total_plot$THRA2), ]  # sort
+total_plot$Sample <- factor(total_plot$Sample, levels = total_plot$Sample)  # convert to factor to retain sorted order in plot.
+
+total_plot <- pivot_longer(total_plot, c("THRA1","THRA2"), names_to = "Isoform", values_to = "Expression")
+  
+
+ggbarplot(total_plot, x = "Time_point", y = "Expression", add = "mean_se",
+          fill = "Isoform") +
+  scale_fill_manual("", values = c("THRA1"="#A2D2DB","THRA2" = "#5A7C86")) +
+  labs(subtitle="Gorilla", 
+       title= paste0("THRA isoform expression pattern"),
+       caption = "Mean +- SEM, n=3") +
+  scale_y_continuous("Isoform precentage (%)", breaks = c(0, 25, 50, 75, 100)) +
+  geom_hline(yintercept=50, linetype="dashed", color = "red")+
+  theme(legend.position='right')+
+  theme_light(base_size = 14)
+
+
+ggsave("THRA1_THRA2_mosdepth_over_time_gorilla.png" , device=png, dpi = 600, path = path_plots, bg = "transparent", width = 20, height = 15, units = "cm" )
+```
+
+
+
+
+```{r}
+### Lets upload the HiSat2 gene expression file provided by the authors of the paper
+dataset_authors <- read_delim("GSE153076_hum_gor_combined_tpms_HISAT2.txt") %>%
+  select(-gene_id, -meanH9_d5, -sdH9_d5, -meanH9_d7, -sdH9_d7, -meanH9_d8, -sdH9_d8, -meanH9_d10, -sdH9_d10, -meanH9_d15, -sdH9_d15, -meanH9_d20, -sdH9_d20, -meanH9_d30, -sdH9_d30, -meanGC_d5, -sdGC_d5, -meanGC_d7, -sdGC_d7, -meanGC_d8, -sdGC_d8, -meanGC_d10, -sdGC_d10, -meanGC_d15, -sdGC_d15, -meanGC_d20, -sdGC_d20, -meanGC_d30, -sdGC_d30)
+
+colnames(dataset_authors)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 ```{r}
