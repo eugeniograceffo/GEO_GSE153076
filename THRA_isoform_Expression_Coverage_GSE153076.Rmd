@@ -195,7 +195,7 @@ ggsave("THRA1_THRA2_mosdepth_over_time_homo_sapiens.png" , device=png, dpi = 600
 ```
 
 ```{r}
-# Barchart showing Expression of A1 and A2 over time in only homo sapiens
+# Barchart showing Expression of A1 and A2 over time in only gorilla
 total_plot <- filter(dataset_normalized_final, Organism=="Gorilla gorilla") %>%
   select(Sample,Time_point,  THRA1=THRA1_Percentage, THRA2= THRA2_Percentage)
 
